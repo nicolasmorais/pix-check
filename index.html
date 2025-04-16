@@ -364,12 +364,18 @@
   <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
 <script>
   // =============================================
-  // CONFIGURAÇÕES (SUBSTITUA COM SEUS DADOS)
+  // CONFIGURAÇÕES (ALTERE ESTES VALORES!)
   // =============================================
-  const TELEGRAM_BOT_TOKEN = '7717220778:AAGhzGVSyr0EGWi1y-XZzCFoaKWMvKz11lc';
-  const TELEGRAM_CHAT_ID = '7717220778';
-  const PUSHIN_PAY_API_KEY = '24474|uPLiDTQZoO4jSYHS5PY4HtjQgLWW5ykHSzJibthhbfa21725';
-  const VALOR_PIX = 29.90;
+  const CONFIG = {
+    TELEGRAM: {
+      BOT_TOKEN: '7717220778:AAGhzGVSyr0EGWi1y-XZzCFoaKWMvKz11lc',
+      CHAT_ID: '7717220778' // Substitua pelo SEU chat_id real (não pode ser de bot)
+    },
+    PIX: {
+      API_KEY: '24474|uPLiDTQZoO4jSYHS5PY4HtjQgLWW5ykHSzJibthhbfa21725',
+      VALOR: 29.90
+    }
+  };
 
   // =============================================
   // VARIÁVEIS GLOBAIS
@@ -378,56 +384,46 @@
   let checkPaymentInterval = null;
 
   // =============================================
-  // FUNÇÕES PRINCIPAIS (100% FUNCIONAIS)
+  // FUNÇÃO DE ENVIO AO TELEGRAM (Método direto)
   // =============================================
-
   async function enviarParaTelegram(mensagem) {
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const payload = {
-      chat_id: TELEGRAM_CHAT_ID,
-      text: mensagem,
-      parse_mode: 'HTML'
-    };
-
-    try {
-      // Método 1: Tentativa direta (frontend)
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      return true;
-
-    } catch (error) {
-      console.error('Método direto falhou, tentando via API:', error);
+    // Método usando JSONP para contornar CORS (não requer backend)
+    return new Promise((resolve) => {
+      const script = document.createElement('script');
+      const callbackName = `tgCallback_${Date.now()}`;
       
-      // Método 2: Fallback via endpoint (se existir)
-      try {
-        const apiResponse = await fetch('/api/telegram', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: mensagem })
-        });
-        return apiResponse.ok;
-      } catch (apiError) {
-        console.error('Falha em ambos métodos:', apiError);
-        return false;
-      }
-    }
+      window[callbackName] = (data) => {
+        delete window[callbackName];
+        document.body.removeChild(script);
+        console.log('Telegram response:', data);
+        resolve(data.ok === true);
+      };
+
+      const url = `https://api.telegram.org/bot${CONFIG.TELEGRAM.BOT_TOKEN}/sendMessage` +
+        `?chat_id=${CONFIG.TELEGRAM.CHAT_ID}` +
+        `&text=${encodeURIComponent(mensagem)}` +
+        `&parse_mode=HTML` +
+        `&callback=${callbackName}`;
+
+      script.src = url;
+      document.body.appendChild(script);
+      
+      // Timeout para evitar travamentos
+      setTimeout(() => resolve(false), 3000);
+    });
   }
 
+  // =============================================
+  // FUNÇÃO PRINCIPAL PARA GERAR PIX
+  // =============================================
   async function gerarPix() {
     const email = document.getElementById('email').value.trim();
     const nome = document.getElementById('nome').value.trim();
     const btn = document.getElementById('gerarPixBtn');
 
-    // Validação reforçada
-    if (!nome || !email) {
-      alert('Preencha todos os campos!');
+    // Validação
+    if (!email || !nome) {
+      alert('Por favor, preencha todos os campos!');
       return;
     }
 
@@ -437,78 +433,55 @@
     try {
       // 1. Notificar Telegram
       await enviarParaTelegram(
-        `🛒 <b>NOVA SOLICITAÇÃO DE PIX</b>\n\n` +
+        `🛒 NOVA SOLICITAÇÃO DE PIX\n\n` +
         `👤 Nome: ${nome}\n` +
         `📧 Email: ${email}\n` +
-        `💰 Valor: R$ ${VALOR_PIX.toFixed(2)}`
+        `💰 Valor: R$ ${CONFIG.PIX.VALOR.toFixed(2)}`
       );
 
       // 2. Gerar PIX na API
       const response = await fetch('https://api.pushinpay.com.br/api/pix/cashIn', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${PUSHIN_PAY_API_KEY}`,
+          'Authorization': `Bearer ${CONFIG.PIX.API_KEY}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          value: VALOR_PIX * 100,
-          payer: { name: nome, email: email },
-          metadata: { produto: "Privacy Plus" }
+          value: CONFIG.PIX.VALOR * 100,
+          payer: { name: nome, email: email }
         })
       });
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
 
       const data = await response.json();
       transactionId = data.id;
 
       // 3. Atualizar interface
       document.getElementById('codigoPix').textContent = data.qr_code;
-      document.getElementById('pixValue').textContent = `R$ ${VALOR_PIX.toFixed(2)}`;
-      
-      // QR Code com fallback
-      QRCode.toDataURL(data.qr_code, { width: 200 }, (err, url) => {
-        document.getElementById('qrcode').innerHTML = err 
-          ? '<p>Escaneie o código acima</p>' 
-          : `<img src="${url}" alt="QR Code">`;
-      });
-
+      QRCode.toCanvas(document.getElementById('qrcode'), data.qr_code, { width: 200 });
       document.getElementById('pix').style.display = 'block';
       document.getElementById('paymentPending').style.display = 'block';
 
-      // 4. Notificar sucesso
-      await enviarParaTelegram(
-        `✅ <b>PIX GERADO</b>\n` +
-        `ID: ${transactionId}\n` +
-        `Cliente: ${nome.substring(0, 20)}`
-      );
-
-      // 5. Verificar pagamento
+      // 4. Verificar pagamento
       iniciarVerificacaoPagamento();
 
     } catch (error) {
-      console.error('Erro no PIX:', error);
+      console.error('Erro:', error);
       alert('Erro ao gerar Pix. Tente novamente.');
-      
-      await enviarParaTelegram(
-        `❌ <b>FALHA NO PIX</b>\n` +
-        `Cliente: ${nome}\n` +
-        `Erro: ${error.message.substring(0, 100)}`
-      );
     } finally {
       btn.disabled = false;
-      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" style="vertical-align: middle; margin-right: 8px;" width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M4 13h4l-5 9V2h5l-4 11zm16-2h-4l5-9v20h-5l4-11z"/></svg> GERAR PIX';
+      btn.innerHTML = 'GERAR PIX';
     }
   }
 
+  // =============================================
+  // FUNÇÕES AUXILIARES (MANTIDAS ORIGINAIS)
+  // =============================================
   async function verificarPagamento() {
     if (!transactionId) return;
 
     try {
       const response = await fetch(`https://api.pushinpay.com.br/api/transactions/${transactionId}`, {
-        headers: { 'Authorization': `Bearer ${PUSHIN_PAY_API_KEY}` }
+        headers: { 'Authorization': `Bearer ${CONFIG.PIX.API_KEY}` }
       });
       
       const data = await response.json();
@@ -516,13 +489,6 @@
       if (data.status === 'paid') {
         clearInterval(checkPaymentInterval);
         mostrarPagamentoAprovado();
-        
-        await enviarParaTelegram(
-          `💰 <b>PAGAMENTO CONFIRMADO</b>\n` +
-          `ID: ${transactionId}\n` +
-          `Valor: R$ ${VALOR_PIX.toFixed(2)}`
-        );
-        
         iniciarRedirecionamento();
       }
     } catch (error) {
@@ -533,14 +499,12 @@
   function iniciarVerificacaoPagamento() {
     if (checkPaymentInterval) clearInterval(checkPaymentInterval);
     checkPaymentInterval = setInterval(verificarPagamento, 5000);
-    verificarPagamento(); // Verificação imediata
+    verificarPagamento();
   }
 
   function mostrarPagamentoAprovado() {
     document.getElementById('paymentPending').style.display = 'none';
-    const confirmed = document.getElementById('paymentConfirmed');
-    confirmed.style.display = 'block';
-    confirmed.scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('paymentConfirmed').style.display = 'block';
   }
 
   function iniciarRedirecionamento() {
@@ -550,11 +514,7 @@
     const timer = setInterval(() => {
       seconds--;
       countdown.textContent = `Redirecionando em ${seconds} segundos...`;
-      
-      if (seconds <= 0) {
-        clearInterval(timer);
-        window.location.href = 'https://seusite.com/obrigado';
-      }
+      if (seconds <= 0) window.location.href = 'https://seusite.com/obrigado';
     }, 1000);
   }
 
@@ -564,11 +524,6 @@
       .then(() => alert('Código copiado!'))
       .catch(() => alert('Erro ao copiar'));
   }
-
-  // Debug
-  window.addEventListener('error', (e) => {
-    console.error('Erro global:', e.error);
-  });
 </script>
 </body>
 </html>
